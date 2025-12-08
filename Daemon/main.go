@@ -1,294 +1,341 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
-	"log"
-	"os"
-	"path/filepath"
-
-	"encoding/json"
-	"flag"
 	"fmt"
-	"io"
+	"os"
 	"os/exec"
 	"os/signal"
-	"sort"
+	"runtime"
 	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var (
-	defaultDBPath     = "./containers.db"
-	defaultIntervalS  = 5
-	defaultMaxProcess = 30
+const (
+	sysinfoPath      = "/proc/sysinfo_so1_201801521"
+	continfoPath     = "/proc/continfo_so1_201801521"
+	dbPath           = "monitoring.db"
+	defaultInterval1 = 20 * time.Second
 )
 
-// Process representa un proceso dentro del snapshot
-type Process struct {
-	Pid      int    `json:"pid"`
-	Comm     string `json:"comm"`
-	RssKB    uint64 `json:"rss_kb"`
-	VmsizeKB uint64 `json:"vmsize_kb"`
-	State    string `json:"state"`
-	Utime    uint64 `json:"utime"`
-	Stime    uint64 `json:"stime"`
-	TsMs     uint64 `json:"ts_ms"`
+// helper: total contenedores eliminados (para container_host_metrics)
+func GetTotalDeletedContainers(db *sql.DB) (int, error) {
+	row := db.QueryRow(`SELECT COUNT(*) FROM containers WHERE removed_at_ts_ms IS NOT NULL;`)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("error consultando total contenedores eliminados: %w", err)
+	}
+	return count, nil
 }
 
-// SysInfo representa la cabecera global y la lista de procesos
-type SysInfo struct {
-	TotalRAMKB     uint64    `json:"total_ram_kb"`
-	FreeRAMKB      uint64    `json:"free_ram_kb"`
-	AvailableKB    uint64    `json:"available_kb"`
-	RamUsedKB      uint64    `json:"ram_used_kb"`
-	TotalProcs     int64     `json:"total_procs"`
-	CPUUsagePct    uint64    `json:"cpu_usage_pct"`
-	TsMs           uint64    `json:"ts_ms"`
-	Procesos       []Process `json:"procesos"`
-	RawJSONPresent bool      // no se mapea de JSON; se usa internamente si hace falta
-}
+// Inicia el stack de Grafana desde docker-compose
+func StartGrafanaContainers(composeDir string) error {
+	fmt.Println("🚀 Iniciando contenedor de Grafana...")
 
-// ReadSysinfo lee el archivo proc generado por el módulo y lo parsea en SysInfo.
-// path: ruta al archivo, por ejemplo "/proc/sysinfo_so1_201801521".
-func ReadSysinfo(path string) (SysInfo, error) {
-	var si SysInfo
+	cmd := exec.Command("docker", "compose", "up", "-d")
+	cmd.Dir = composeDir // carpeta donde está tu docker-compose.yml
 
-	f, err := os.Open(path)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return si, fmt.Errorf("no se pudo abrir %s: %w", path, err)
+		return fmt.Errorf("error iniciando Grafana: %w\nSalida:\n%s", err, string(output))
 	}
-	defer f.Close()
 
-	// Leer todo el contenido (asumimos tamaño razonable)
-	data, err := io.ReadAll(f)
+	fmt.Println("✅ Grafana iniciado correctamente.")
+	fmt.Println(string(output))
+	return nil
+}
+
+func IsGrafanaRunning() bool {
+	cmd := exec.Command("docker", "ps", "--filter", "name=grafana-sqlite", "--filter", "status=running", "--format", "{{.Names}}")
+	out, err := cmd.Output()
 	if err != nil {
-		return si, fmt.Errorf("error leyendo %s: %w", path, err)
+		return false
 	}
-
-	// Decodificar JSON
-	if err := json.Unmarshal(data, &si); err != nil {
-		// Si falla, intentamos devolver algo más de contexto
-		return si, fmt.Errorf("error parseando JSON de %s: %w\ncontenido recibido:\n%s", path, err, string(data))
-	}
-
-	si.RawJSONPresent = true
-	return si, nil
-}
-
-// pretty print: info general + Top CPU + lista breve
-func PrintSysInfo(si SysInfo) {
-	ts := time.UnixMilli(int64(si.TsMs))
-	fmt.Println("=== SysInfo Snapshot ===")
-	fmt.Printf("Timestamp (ms): %d (%s)\n", si.TsMs, ts.UTC().Format(time.RFC3339Nano))
-	fmt.Printf("Total RAM:     %d KB\n", si.TotalRAMKB)
-	fmt.Printf("Free RAM:      %d KB\n", si.FreeRAMKB)
-	fmt.Printf("Available RAM: %d KB\n", si.AvailableKB)
-	fmt.Printf("RAM Used:      %d KB\n", si.RamUsedKB)
-	fmt.Printf("CPU Usage %%:   %d\n", si.CPUUsagePct)
-	fmt.Printf("Total procesos:%d\n", si.TotalProcs)
-	fmt.Printf("Procesos reportados en lista: %d\n", len(si.Procesos))
-	fmt.Println()
-
-	if len(si.Procesos) == 0 {
-		fmt.Println("No hay procesos en el snapshot.")
-		return
-	}
-
-	// --- TOP N por CPU (utime + stime) ---
-	// Primero verificamos si hay *algún* proceso con CPU > 0
-	cpuDataAvailable := false
-	for _, p := range si.Procesos {
-		if p.Utime != 0 || p.Stime != 0 {
-			cpuDataAvailable = true
-			break
-		}
-	}
-
-	if cpuDataAvailable {
-		procsByCPU := make([]Process, len(si.Procesos))
-		copy(procsByCPU, si.Procesos)
-
-		sort.Slice(procsByCPU, func(i, j int) bool {
-			ci := procsByCPU[i].Utime + procsByCPU[i].Stime
-			cj := procsByCPU[j].Utime + procsByCPU[j].Stime
-			return ci > cj // descendente
-		})
-
-		topN := 10
-		if topN > len(procsByCPU) {
-			topN = len(procsByCPU)
-		}
-
-		fmt.Printf("=== Top %d procesos por CPU (utime+stime) ===\n", topN)
-		for i := 0; i < topN; i++ {
-			p := procsByCPU[i]
-			totalCPU := p.Utime + p.Stime
-			fmt.Printf("%2d) PID:%5d  Name:%-20s  CPUtime:%12d  RSS:%8d KB  VMSZ:%8d KB  State:%1s\n",
-				i+1, p.Pid, p.Comm, totalCPU, p.RssKB, p.VmsizeKB, p.State)
-		}
-		fmt.Println()
-	} else {
-		fmt.Println("⚠️  Todos los utime/stime vienen en 0; no se puede calcular Top CPU aún.")
-		fmt.Println("   (Necesitas que el módulo del kernel llene utime/stime para cada proceso.)")
-		fmt.Println()
-	}
-
-	// --- Lista breve de procesos (como referencia) ---
-	fmt.Println("=== Lista de procesos (primeros 50 mostrados) ===")
-	limit := len(si.Procesos)
-	if limit > 50 {
-		limit = 50
-	}
-	for i := 0; i < limit; i++ {
-		p := si.Procesos[i]
-		fmt.Printf("PID:%5d  Name:%-20s State:%1s  RSS:%8d KB  VMSZ:%8d KB  utime:%12d  stime:%12d  ts_ms:%d\n",
-			p.Pid, p.Comm, p.State, p.RssKB, p.VmsizeKB, p.Utime, p.Stime, p.TsMs)
-	}
-	if len(si.Procesos) > 50 {
-		fmt.Printf("... (se muestran 50 de %d procesos)\n", len(si.Procesos))
-	}
-}
-
-func RunBashScript(path string) error {
-	cmd := exec.Command("bash", path)
-
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	fmt.Printf("Ejecutando script: %s\n", path)
-	return cmd.Run()
+	return len(out) > 0
 }
 
 func main() {
 
-	// Ruta al archivo generado por el módulo del kernel
-	defaultPath := "/proc/sysinfo_so1_201801521"
+	// ====== MANEJO DE CTRL+C / SIGTERM ======
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	path := flag.String("path", defaultPath, "Ruta al archivo del módulo")
-	flag.Parse()
+	go func() {
+		<-sigChan
+		fmt.Println("\n🛑 Señal de parada recibida (Ctrl+C). Ejecutando detener.sh...")
 
-	// 🔁 Loop infinito que lee cada 20 segundos
-	for {
-		si, err := ReadSysinfo(*path)
-		if err != nil {
-			fmt.Println("Error leyendo sysinfo:", err)
-		} else {
-			PrintSysInfo(si)
+		if err := RunDetenerScript(); err != nil {
+			fmt.Println("❌ Error al ejecutar detener.sh:", err)
 		}
 
-		time.Sleep(20 * time.Second)
+		fmt.Println("👋 Saliendo del daemon.")
+		os.Exit(0)
+	}()
+
+	//EJECUCION DE GRAFANA
+	composeDir := "/home/jemima/Documentos/proyecto-1/grafana" // ajusta si cambia la ruta
+
+	if !IsGrafanaRunning() {
+		if err := StartGrafanaContainers(composeDir); err != nil {
+			fmt.Println("❌ No se pudo iniciar Grafana:", err)
+		} else {
+			fmt.Println("📊 Grafana disponible en: http://localhost:3000")
+		}
+	} else {
+		fmt.Println("✅ Grafana ya estaba corriendo.")
 	}
-}
 
-func pendiente() {
+	//EJECUCION DEL SCRIPT PARA CARGAR MODULOS DE KERNEL
+	if err := RunInstallModules(); err != nil {
+		fmt.Println(" No se pudieron instalar los módulos:", err)
+		// decide si quieres terminar aquí o seguir
+		// return
+	}
+	//CRONJOB
 
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = defaultDBPath
+	if err := RunStressContainerScript(); err != nil {
+		fmt.Println("❌ No se pudo ejecutar stress_container.sh:", err)
+		// decide si sigues o no
 	}
 
-	// crear carpeta si es necesario
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		log.Fatalf("no se pudo crear carpeta para db: %v", err)
-	}
+	//LOOP PRINCIPAL
 
-	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=1")
+	fmt.Println("🧠 Monitor + Orquestador de contenedores iniciado")
+	fmt.Printf("   Leyendo sysinfo:  %s\n", sysinfoPath)
+	fmt.Printf("   Leyendo continfo: %s\n", continfoPath)
+	fmt.Printf("   Intervalo:        %s\n", defaultInterval1)
+	fmt.Println("   Ctrl+C para detener.")
+	fmt.Println()
+
+	// 0) Abrir DB y crear tablas
+	db, err := OpenDB(dbPath)
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		fmt.Println("❌ Error abriendo DB:", err)
+		return
 	}
 	defer db.Close()
 
-	if err := createSchema_system(db); err != nil {
-		log.Fatalf("create schema: %v", err)
+	if err := CreateSystemMetricsTable(db); err != nil {
+		fmt.Println("❌ Error creando system_metrics:", err)
+		return
+	}
+	if err := CreateProcessMetricsTable(db); err != nil {
+		fmt.Println("❌ Error creando process_metrics:", err)
+		return
+	}
+	if err := CreateProcessStateSummaryTable(db); err != nil {
+		fmt.Println("❌ Error creando process_state_summary:", err)
+		return
+	}
+	if err := CreateContainerHostMetricsTable(db); err != nil {
+		fmt.Println("❌ Error creando container_host_metrics:", err)
+		return
+	}
+	if err := CreateContainersTable(db); err != nil {
+		fmt.Println("❌ Error creando containers:", err)
+		return
+	}
+	if err := CreateContainerMetricsTable(db); err != nil {
+		fmt.Println("❌ Error creando container_metrics:", err)
+		return
 	}
 
-	if err := createSchema_containers(db); err != nil {
-		log.Fatalf("create schema containers: %v", err)
-	}
+	// Para calcular %CPU necesitamos snapshot previo
+	var (
+		prevSys      SysInfo
+		havePrevSys  bool
+		prevCont     ContInfoSnapshot
+		havePrevCont bool
+	)
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	numCPUs := runtime.NumCPU()
 
-	// Se define el ticker de 20 segundos
-	ticker := time.NewTicker(20 * time.Second)
-	// 'defer ticker.Stop()' asegura que el temporizador se detenga correctamente cuando el programa termine.
-	defer ticker.Stop()
-
-loop:
 	for {
-		select {
-		case <-ticker.C:
+		fmt.Println("\n\n========== CICLO DE MONITOREO ==========")
+		now := time.Now()
+		fmt.Printf("%s\n", now.Format(time.RFC3339))
 
-		case <-sigs:
-			// Este caso se ejecuta cuando se recibe una señal de interrupción o terminación.
-			// Detiene el daemon y sale del bucle.
-			log.Println("Daemon detenido.")
-			break loop
+		// ===== 1) SYSINFO: procesos del sistema =====
+		si, err := ReadSysinfo(sysinfoPath)
+		if err != nil {
+			fmt.Println("❌ Error leyendo sysinfo:", err)
+		} else {
+			// 1.a) Mostrar en consola
+			PrintSysInfo(si)
+
+			// 1.b) Insertar métricas globales
+			if _, err := InsertSystemMetrics(db, si); err != nil {
+				fmt.Println("❌ Error InsertSystemMetrics:", err)
+			}
+
+			// 1.c) Calcular %CPU por proceso (si tenemos snapshot previo)
+			var cpuPctProc map[int]float64
+			if havePrevSys {
+				cpuPctProc = BuildProcCpuPct(prevSys, si, numCPUs, 100.0) // HZ=100 (ajusta si tu kernel usa otro)
+			}
+
+			// 1.d) Insertar procesos
+			if err := InsertProcessMetricsBulk(db, si, cpuPctProc); err != nil {
+				fmt.Println("❌ Error InsertProcessMetricsBulk:", err)
+			}
+
+			// 1.e) Resumen de estados
+			if err := InsertProcessStateSummary(db, si); err != nil {
+				fmt.Println("❌ Error InsertProcessStateSummary:", err)
+			}
+
+			// Actualizar snapshot previo
+			prevSys = si
+			havePrevSys = true
 		}
-	}
 
+		// ===== 2) CONINFO: contenedores =====
+		snap, err := ReadContInfo(continfoPath)
+		if err != nil {
+			fmt.Println("❌ Error leyendo continfo:", err)
+		} else {
+			// 2.a) Mostrar contenedores detectados
+			PrintContainers(snap)
+
+			// 2.b) Ciclo de vida de contenedores (containers)
+			if err := UpsertContainersFromSnapshot(db, snap); err != nil {
+				fmt.Println("❌ Error UpsertContainersFromSnapshot:", err)
+			}
+
+			// 2.c) Total contenedores eliminados (acumulado)
+			totalDeletedAcc, err := GetTotalDeletedContainers(db)
+			if err != nil {
+				fmt.Println("❌ Error GetTotalDeletedContainers:", err)
+				totalDeletedAcc = 0
+			}
+
+			// 2.d) Métricas a nivel host de contenedores
+			if _, err := InsertContainerHostMetrics(db, snap, totalDeletedAcc); err != nil {
+				fmt.Println("❌ Error InsertContainerHostMetrics:", err)
+			}
+
+			// 2.e) Calcular %CPU por contenedor (si tenemos snapshot previo)
+			var cpuPctCont map[string]float64
+			if havePrevCont {
+				cpuPctCont = BuildContainerCpuPct(prevCont, snap, numCPUs)
+			}
+
+			// 2.f) Métricas por contenedor
+			if err := InsertContainerMetricsBulk(db, snap, cpuPctCont); err != nil {
+				fmt.Println("❌ Error InsertContainerMetricsBulk:", err)
+			}
+
+			// Actualizar snapshot previo
+			prevCont = snap
+			havePrevCont = true
+		}
+
+		// ===== 3) Aplicar reglas de eliminación sobre contenedores stress-* =====
+		// (Tu lógica ya existente)
+		enforceRules()
+
+		// ===== 4) Esperar siguiente ciclo =====
+		time.Sleep(defaultInterval1)
+	}
 }
 
-func createSchema_system(db *sql.DB) error {
-	queries := []string{
-		// Tabla para métricas agregadas del sistema por tiempo
-		`CREATE TABLE IF NOT EXISTS system_metrics (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts INTEGER NOT NULL, -- epoch seconds
-			total_ram_mb INTEGER,
-			free_ram_mb INTEGER,
-			total_processes INTEGER,
-			ram_used_mb INTEGER
-		);`,
-		// Tabla con procesos y su consumo en un momento dado
-		`CREATE TABLE IF NOT EXISTS process_stats (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts INTEGER NOT NULL, -- epoch seconds
-			pid INTEGER,
-			name TEXT,
-			cpu_percent REAL,
-			ram_mb INTEGER
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_system_metrics_ts ON system_metrics(ts);`,
-		`CREATE INDEX IF NOT EXISTS idx_process_stats_ts ON process_stats(ts);`,
+// OpenDB abre (o crea) el archivo SQLite
+func OpenDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo abrir la DB %s: %w", dbPath, err)
 	}
-	for _, q := range queries {
-		if _, err := db.Exec(q); err != nil {
-			return err
-		}
+
+	// Verificamos conexión
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("error haciendo ping a la DB: %w", err)
+	}
+
+	return db, nil
+}
+
+func RunInstallModules() error {
+	scriptPath := "../bash/install_modules.sh" // relativo a la carpeta Daemon
+
+	cmd := exec.Command("bash", scriptPath)
+	// Si quieres poner timeout:
+	// ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// defer cancel()
+	// cmd := exec.CommandContext(ctx, "bash", scriptPath)
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	fmt.Println("🔧 Ejecutando script de instalación de módulos:", scriptPath)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("error ejecutando %s: %w\nstderr:\n%s", scriptPath, err, stderr.String())
+	}
+
+	fmt.Println("✅ Script de instalación finalizado.")
+	if out.Len() > 0 {
+		fmt.Println("Salida:")
+		fmt.Println(out.String())
 	}
 	return nil
 }
 
-func createSchema_containers(db *sql.DB) error {
-	queries := []string{
-		// Tabla para métricas agregadas del sistema por tiempo
-		`CREATE TABLE IF NOT EXISTS containers_metrics (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts INTEGER NOT NULL, -- epoch seconds
-			total_ram_mb INTEGER,
-			free_ram_mb INTEGER,
-			total_containers_deleted INTEGER,
-			ram_used_mb INTEGER
-		);`,
-		// Tabla con procesos y su consumo en un momento dado
-		`CREATE TABLE IF NOT EXISTS process_containers_stats (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			ts INTEGER NOT NULL, -- epoch seconds
-			pid INTEGER,
-			name TEXT,
-			cpu_percent REAL,
-			ram_mb INTEGER
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_system_metrics_ts ON system_metrics(ts);`,
-		`CREATE INDEX IF NOT EXISTS idx_process_stats_ts ON process_stats(ts);`,
+func RunStressContainerScript() error {
+	scriptPath := "../cronjob/stress_container.sh" // ruta relativa a /Daemon
+
+	cmd := exec.Command("bash", scriptPath)
+
+	// (Opcional) timeout manual usando context si quieres:
+	// ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// defer cancel()
+	// cmd := exec.CommandContext(ctx, "bash", scriptPath)
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	fmt.Println("🏋️ Ejecutando script de estrés de contenedores:", scriptPath)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("error ejecutando %s: %w\nstderr:\n%s", scriptPath, err, stderr.String())
 	}
-	for _, q := range queries {
-		if _, err := db.Exec(q); err != nil {
-			return err
-		}
+
+	fmt.Println("✅ Script stress_container.sh finalizado.")
+	if out.Len() > 0 {
+		fmt.Println("Salida:")
+		fmt.Println(out.String())
+	}
+	return nil
+}
+
+// Ejecuta el bash que detiene los contenedores de estrés
+func RunDetenerScript() error {
+	scriptPath := "../cronjob/detener.sh"
+
+	cmd := exec.Command("bash", scriptPath)
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	fmt.Println("🧹 Ejecutando script de limpieza de contenedores:", scriptPath)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("error ejecutando %s: %w\nstderr:\n%s", scriptPath, err, stderr.String())
+	}
+
+	fmt.Println("✅ Script detener.sh finalizado.")
+	if out.Len() > 0 {
+		fmt.Println("Salida:")
+		fmt.Println(out.String())
 	}
 	return nil
 }

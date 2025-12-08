@@ -1,0 +1,11 @@
+# Datos generados por Grafana
+grafana/grafana-data/
+
+# Bases de datos locales
+*.db
+
+# Archivos compilados del kernel, etc.
+kernel/*.o
+kernel/*.cmd
+kernel/*.mod
+

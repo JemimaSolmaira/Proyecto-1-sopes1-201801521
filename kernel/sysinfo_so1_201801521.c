@@ -1,4 +1,3 @@
-// sysinfo_so1_201801521.c  (versión corregida para evitar get_fs/set_fs y strtok_r)
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -19,7 +18,7 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("201801521");
-MODULE_DESCRIPTION("Modulo de monitoreo de sistema: RAM, CPU y procesos (versión corregida)");
+MODULE_DESCRIPTION("Modulo de monitoreo de sistema: RAM, CPU y procesos");
 MODULE_VERSION("1.2.1");
 
 static struct proc_dir_entry *proc_entry;
@@ -49,7 +48,7 @@ static void get_cpu_usage(unsigned long *usage_percent)
         return;
     }
 
-    /* kernel_read está disponible en kernels recientes */
+    /* kernel_read  */
     n = kernel_read(file, buf, 1023, &pos);
     if (n <= 0) {
         filp_close(file, NULL);
@@ -80,7 +79,7 @@ static void get_cpu_usage(unsigned long *usage_percent)
     kfree(buf);
 }
 
-/* --- Helper: parsear /proc/meminfo para obtener MemTotal, MemFree, MemAvailable en kB --- */
+/* Helper: parsear /proc/meminfo para obtener MemTotal, MemFree, MemAvailable en kB  */
 static void get_meminfo_kb(unsigned long *total_kb, unsigned long *free_kb, unsigned long *available_kb)
 {
     struct file *file;
@@ -127,35 +126,34 @@ static void get_meminfo_kb(unsigned long *total_kb, unsigned long *free_kb, unsi
     kfree(buf);
 }
 
-/* Helper: estado simplificado de task
-   NOTA: en algunas versiones del kernel el campo `task->state` o su nombre puede cambiar.
-   Para máxima portabilidad devolvemos '?' como fallback. Si en tu kernel existe task->state,
-   puedes activar la lectura (ver comentarios). */
+/* Helper: estado simplificado de task */
 static char task_state_char(struct task_struct *task)
 {
-#ifdef TASK_RUNNING
-    /* Intento leer state de forma segura si el miembro existe; en kernels donde no existe,
-       el compilador dará error y este bloque será ignorado si TASK_RUNNING no está definido. */
-    long state = 0;
-    /* try to read if available - use READ_ONCE to be safe */
-    /* This may still fail on some kernels; if it does, we fallback below */
-#ifdef HAVE_TASK_STATE_FIELD
-    state = READ_ONCE(task->state);
+    unsigned int state = READ_ONCE(task->__state);  
+    char ret = '?';
+
     if (state == TASK_RUNNING)
-        return 'R';
-    if (state == TASK_UNINTERRUPTIBLE)
-        return 'D';
-    if (state == TASK_STOPPED || state == TASK_TRACED)
-        return 'T';
-    if (state == EXIT_ZOMBIE || state == EXIT_DEAD)
-        return 'Z';
-#endif
-#endif
-    /* Fallback genérico: no dependemos del campo interno */
-    return '?';
+        ret = 'R';               /* Running */
+    else if (state & TASK_INTERRUPTIBLE)
+        ret = 'S';               /* Sleeping */
+    else if (state & TASK_UNINTERRUPTIBLE)
+        ret = 'D';               /* Disk sleep / uninterruptible */
+    else if (state & __TASK_STOPPED)
+        ret = 'T';               /* Stopped */
+    else if (state & __TASK_TRACED)
+        ret = 't';               /* Traced */
+
+    /* Estados de salida (zombie / dead) */
+    if (task->exit_state == EXIT_ZOMBIE)
+        ret = 'Z';
+    else if (task->exit_state == EXIT_DEAD)
+        ret = 'X';
+
+    return ret;
 }
 
-/* --- Función principal: imprime JSON con global + lista de procesos --- */
+
+/* JSON con global + lista de procesos */
 static int sysinfo_show(struct seq_file *m, void *v)
 {
     unsigned long total_ram_kb = 0, free_ram_kb = 0, available_kb = 0;
@@ -210,8 +208,9 @@ static int sysinfo_show(struct seq_file *m, void *v)
         unsigned long rss_kb = 0;
         unsigned long vmsize_kb = 0;
         unsigned long long utime_val = 0;
-unsigned long long stime_val = 0;
-char state_ch = '?';
+        unsigned long long stime_val = 0;
+        char state_ch;
+        struct mm_struct *mm = NULL;
 
 {
     u64 utime_tmp, stime_tmp;
@@ -219,7 +218,8 @@ char state_ch = '?';
     utime_val = (unsigned long long)utime_tmp;
     stime_val = (unsigned long long)stime_tmp;
 }
-        struct mm_struct *mm = NULL;
+state_ch = task_state_char(task);
+        
 
         /* nombre del proceso */
         get_task_comm(comm, task);
@@ -237,9 +237,6 @@ char state_ch = '?';
             rss_kb    = 0;
             vmsize_kb = 0;
         }
-
-        /* utime/stime: por ahora se dejan en 0 hasta adaptar a tu versión de kernel */
-        /* state: por ahora '?' hasta adaptar a tu versión de kernel */
 
         if (!first_proc)
             seq_printf(m, "    ,\n");
