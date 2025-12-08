@@ -252,40 +252,14 @@ func CreateContainerMetricsTable(db *sql.DB) error {
 	return nil
 }
 
-// insert  por contenedor  en container_metrics.
 func InsertContainerMetricsBulk(db *sql.DB, snap ContInfoSnapshot, cpuPctMap map[string]float64) error {
-	// Agregar por contenedor
-	type agg struct {
-		rssKB     int64
-		cpuTimeNs int64
-	}
-	aggregates := make(map[string]*agg)
-
-	for _, p := range snap.Procesos {
-		if p.ContainerRelated != "yes" {
-			continue
-		}
-		if !isStressProcess(p) {
-			continue
-		}
-
-		cid := p.CmdlineOrContID
-		if cid == "" {
-			continue
-		}
-
-		a, ok := aggregates[cid]
-		if !ok {
-			a = &agg{}
-			aggregates[cid] = a
-		}
-		a.rssKB += int64(p.RSSKB)
-		a.cpuTimeNs += int64(p.CPUTimeNs)
-	}
-
-	if len(aggregates) == 0 {
+	if len(snap.Procesos) == 0 {
 		return nil
 	}
+
+	fmt.Println("========== InsertContainerMetricsBulk ==========")
+	fmt.Println("TS Snapshot:", snap.TsMs)
+	fmt.Println("Total procesos en snapshot:", len(snap.Procesos))
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -307,51 +281,106 @@ func InsertContainerMetricsBulk(db *sql.DB, snap ContInfoSnapshot, cpuPctMap map
 	}
 	defer stmt.Close()
 
-	for cid, a := range aggregates {
+	insertCount := 0
+
+	for _, p := range snap.Procesos {
+
+		if !isStressProcess(p) {
+			continue
+		}
+
+		if p.CmdlineOrContID == "" {
+			fmt.Printf("⚠️ Proceso stress con Cmdline vacío, se omite. PID=%d Nombre=%s\n", p.Pid, p.Nombre)
+			continue
+		}
+
+		cid := normalizeStressContainerID(p)
+
+		// %CPU (si existe en el mapa)
 		cpuPct := 0.0
 		if cpuPctMap != nil {
-			if val, ok := cpuPctMap[cid]; ok {
+			if val, ok := cpuPctMap[p.CmdlineOrContID]; ok {
 				cpuPct = val
 			}
 		}
 
+		fmt.Printf(
+			"💾 Insertando en container_metrics: PID=%d cid=%s Nombre=%s RSS_KB=%d CPU_NS=%d cpuPct=%.2f\n",
+			p.Pid,
+			cid,
+			p.Nombre,
+			p.RSSKB,
+			p.CPUTimeNs,
+			cpuPct,
+		)
+
 		if _, err := stmt.Exec(
 			snap.TsMs,
 			cid,
-			a.rssKB,
-			a.cpuTimeNs,
+			int64(p.RSSKB),
+			int64(p.CPUTimeNs),
 			cpuPct,
 		); err != nil {
 			tx.Rollback()
-			return fmt.Errorf("error insertando métricas de contenedor %s: %w", cid, err)
+			return fmt.Errorf("error insertando métricas de contenedor %s (PID=%d): %w",
+				cid, p.Pid, err)
 		}
+
+		insertCount++
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error haciendo commit en container_metrics: %w", err)
 	}
 
+	fmt.Println("✅ InsertContainerMetricsBulk completado. Filas insertadas:", insertCount)
 	return nil
 }
 
-// isStressProcess devuelve true solo para procesos de contenedores de estrés.
+func normalizeStressContainerID(p ContProcess) string {
+	cid := p.CmdlineOrContID
+
+	if strings.Contains(cid, "--cpu") || strings.Contains(p.Nombre, "stress-ng-cpu") {
+		return "stress-high-cpu"
+	}
+
+	if strings.Contains(cid, "--vm") || strings.Contains(p.Nombre, "stress-ng-vm") {
+		return "stress-high-ram"
+	}
+
+	return "stress-low"
+}
+
 func isStressProcess(p ContProcess) bool {
-	// Nombre del binario dentro del contenedor
+	fmt.Println("🔎 Evaluando proceso:")
+	fmt.Println("   PID:     ", p.Pid)
+	fmt.Println("   Nombre:  ", p.Nombre)
+	fmt.Println("   Cmdline: ", p.CmdlineOrContID)
+
+	// 1) Nombre del binario dentro del contenedor
 	if strings.Contains(p.Nombre, "stress-ng") {
+		fmt.Println("✅ Detectado por Nombre: stress-ng")
 		return true
 	}
 
-	// ID / nombre del contenedor (como lo creas en el bash)
+	// 2) ID / nombre del contenedor (como lo creas en el bash)
 	if strings.Contains(p.CmdlineOrContID, "stress-cpu") {
-		return true
-	}
-	if strings.Contains(p.CmdlineOrContID, "stress-ram") {
-		return true
-	}
-	if strings.Contains(p.CmdlineOrContID, "stress-low") {
+		fmt.Println("✅ Detectado por Cmdline: stress-cpu")
 		return true
 	}
 
+	if strings.Contains(p.CmdlineOrContID, "stress-ram") {
+		fmt.Println("✅ Detectado por Cmdline: stress-ram")
+		return true
+	}
+
+	if strings.Contains(p.CmdlineOrContID, "stress-low") {
+		fmt.Println("✅ Detectado por Cmdline: stress-low")
+		return true
+	}
+
+	// ❌ No es proceso stress
+	fmt.Println("❌ No es proceso de stress")
 	return false
 }
 

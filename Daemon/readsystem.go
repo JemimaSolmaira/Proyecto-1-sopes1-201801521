@@ -105,7 +105,7 @@ func PrintSysInfo(si SysInfo) {
 		}
 		fmt.Println()
 	} else {
-		fmt.Println("⚠️  Todos los utime/stime vienen en 0; no se puede calcular Top CPU aún.")
+		fmt.Println("Todos los utime/stime vienen en 0; no se puede calcular Top CPU aún.")
 		fmt.Println("   (Necesitas que el módulo del kernel llene utime/stime para cada proceso.)")
 		fmt.Println()
 	}

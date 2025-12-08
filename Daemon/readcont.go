@@ -61,7 +61,7 @@ func PrintContainers(snap ContInfoSnapshot) {
 	for _, p := range snap.Procesos {
 		if p.ContainerRelated == "yes" {
 			count++
-			fmt.Printf("📦 Contenedor #%d\n", count)
+			fmt.Printf("   Contenedor #%d\n", count)
 			fmt.Printf("   PID:        %d\n", p.Pid)
 			fmt.Printf("   Nombre:     %s\n", p.Nombre)
 			fmt.Printf("   Cmd/ID:     %s\n", p.CmdlineOrContID)
