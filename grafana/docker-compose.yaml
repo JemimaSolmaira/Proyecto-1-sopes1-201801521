@@ -11,7 +11,5 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      # 👉 que Grafana instale el plugin al iniciar
       - GF_INSTALL_PLUGINS=frser-sqlite-datasource
-      # 👉 permitir plugin no firmado
       - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=frser-sqlite-datasource

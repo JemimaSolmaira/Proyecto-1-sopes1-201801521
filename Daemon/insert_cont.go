@@ -290,7 +290,7 @@ func InsertContainerMetricsBulk(db *sql.DB, snap ContInfoSnapshot, cpuPctMap map
 		}
 
 		if p.CmdlineOrContID == "" {
-			fmt.Printf("⚠️ Proceso stress con Cmdline vacío, se omite. PID=%d Nombre=%s\n", p.Pid, p.Nombre)
+			fmt.Printf("Proceso stress con Cmdline vacío, se omite. PID=%d Nombre=%s\n", p.Pid, p.Nombre)
 			continue
 		}
 
@@ -305,7 +305,7 @@ func InsertContainerMetricsBulk(db *sql.DB, snap ContInfoSnapshot, cpuPctMap map
 		}
 
 		fmt.Printf(
-			"💾 Insertando en container_metrics: PID=%d cid=%s Nombre=%s RSS_KB=%d CPU_NS=%d cpuPct=%.2f\n",
+			"Insertando en container_metrics: PID=%d cid=%s Nombre=%s RSS_KB=%d CPU_NS=%d cpuPct=%.2f\n",
 			p.Pid,
 			cid,
 			p.Nombre,
@@ -333,7 +333,7 @@ func InsertContainerMetricsBulk(db *sql.DB, snap ContInfoSnapshot, cpuPctMap map
 		return fmt.Errorf("error haciendo commit en container_metrics: %w", err)
 	}
 
-	fmt.Println("✅ InsertContainerMetricsBulk completado. Filas insertadas:", insertCount)
+	fmt.Println("InsertContainerMetricsBulk completado. Filas insertadas:", insertCount)
 	return nil
 }
 
@@ -352,35 +352,34 @@ func normalizeStressContainerID(p ContProcess) string {
 }
 
 func isStressProcess(p ContProcess) bool {
-	fmt.Println("🔎 Evaluando proceso:")
-	fmt.Println("   PID:     ", p.Pid)
-	fmt.Println("   Nombre:  ", p.Nombre)
-	fmt.Println("   Cmdline: ", p.CmdlineOrContID)
+	fmt.Println("Evaluando proceso:")
+	fmt.Println("PID:     ", p.Pid)
+	fmt.Println("Nombre:  ", p.Nombre)
+	fmt.Println("Cmdline: ", p.CmdlineOrContID)
 
 	// 1) Nombre del binario dentro del contenedor
 	if strings.Contains(p.Nombre, "stress-ng") {
-		fmt.Println("✅ Detectado por Nombre: stress-ng")
+		fmt.Println("Detectado por Nombre: stress-ng")
 		return true
 	}
 
 	// 2) ID / nombre del contenedor (como lo creas en el bash)
 	if strings.Contains(p.CmdlineOrContID, "stress-cpu") {
-		fmt.Println("✅ Detectado por Cmdline: stress-cpu")
+		fmt.Println("Detectado por Cmdline: stress-cpu")
 		return true
 	}
 
 	if strings.Contains(p.CmdlineOrContID, "stress-ram") {
-		fmt.Println("✅ Detectado por Cmdline: stress-ram")
+		fmt.Println("Detectado por Cmdline: stress-ram")
 		return true
 	}
 
 	if strings.Contains(p.CmdlineOrContID, "stress-low") {
-		fmt.Println("✅ Detectado por Cmdline: stress-low")
+		fmt.Println("Detectado por Cmdline: stress-low")
 		return true
 	}
 
-	// ❌ No es proceso stress
-	fmt.Println("❌ No es proceso de stress")
+	fmt.Println("No es proceso de stress")
 	return false
 }
 

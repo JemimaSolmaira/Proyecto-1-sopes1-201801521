@@ -1,6 +1,5 @@
 FROM grafana/grafana:11.0.0
 
-# Solo declaramos los volúmenes
 VOLUME ["/var/lib/grafana", "/db"]
 
 EXPOSE 3000

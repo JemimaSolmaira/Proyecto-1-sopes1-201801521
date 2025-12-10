@@ -35,17 +35,17 @@ func GetTotalDeletedContainers(db *sql.DB) (int, error) {
 
 // Inicia el stack de Grafana desde docker-compose
 func StartGrafanaContainers(composeDir string) error {
-	fmt.Println("🚀 Iniciando contenedor de Grafana...")
+	fmt.Println("Iniciando contenedor de Grafana...")
 
 	cmd := exec.Command("docker", "compose", "up", "-d")
-	cmd.Dir = composeDir // carpeta donde está tu docker-compose.yml
+	cmd.Dir = composeDir
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error iniciando Grafana: %w\nSalida:\n%s", err, string(output))
 	}
 
-	fmt.Println("✅ Grafana iniciado correctamente.")
+	fmt.Println("Grafana iniciado correctamente.")
 	fmt.Println(string(output))
 	return nil
 }
@@ -67,25 +67,24 @@ func main() {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\n🛑 Señal de parada recibida (Ctrl+C).")
+		fmt.Println("\nSeñal de parada recibida (Ctrl+C).")
 
-		// ✅ 1. Detener bash de stress
 		if stressCmd != nil && stressCmd.Process != nil {
-			fmt.Println("⛔ Deteniendo script stress_container.sh...")
+			fmt.Println("Deteniendo script stress_container.sh...")
 			if err := stressCmd.Process.Kill(); err != nil {
-				fmt.Println("❌ Error al detener stress bash:", err)
+				fmt.Println("Error al detener stress bash:", err)
 			} else {
-				fmt.Println("✅ Stress bash detenido.")
+				fmt.Println("Stress bash detenido.")
 			}
 		}
 
-		// ✅ 2. Ejecutar script detener.sh
-		fmt.Println("🧹 Ejecutando detener.sh...")
+		// 2. Ejecutar script detener.sh
+		fmt.Println("Ejecutando detener.sh...")
 		if err := RunDetenerScript(); err != nil {
-			fmt.Println("❌ Error al ejecutar detener.sh:", err)
+			fmt.Println("Error al ejecutar detener.sh:", err)
 		}
 
-		fmt.Println("👋 Saliendo del daemon.")
+		fmt.Println("Saliendo del daemon.")
 		os.Exit(0)
 	}()
 
@@ -211,8 +210,6 @@ func main() {
 		if err != nil {
 			fmt.Println("Error leyendo continfo:", err)
 		} else {
-			// 2.a) Mostrar contenedores detectados
-			//PrintContainers(snap)
 
 			// 2.b) Ciclo de vida de contenedores (containers)
 			if err := UpsertContainersFromSnapshot(db, snap); err != nil {
@@ -250,7 +247,7 @@ func main() {
 		// ===== 3) Aplicar reglas de eliminación sobre contenedores stress-* =====
 		enforceRules()
 
-		// ===== 4) Esperar siguiente ciclo =====
+		// ===== 4) Esperar siguiente ciclo
 		time.Sleep(defaultInterval1)
 	}
 }
@@ -272,13 +269,9 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 }
 
 func RunInstallModules() error {
-	scriptPath := "../bash/install_modules.sh" // relativo a la carpeta Daemon
+	scriptPath := "../bash/install_modules.sh"
 
 	cmd := exec.Command("bash", scriptPath)
-	// Si quieres poner timeout:
-	// ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	// defer cancel()
-	// cmd := exec.CommandContext(ctx, "bash", scriptPath)
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
@@ -299,13 +292,9 @@ func RunInstallModules() error {
 	return nil
 }
 
-// Variable global (debe estar FUERA de cualquier función, al inicio del archivo):
-// var stressCmd *exec.Cmd
-
 func RunStressContainerScript() error {
-	scriptPath := "../cronjob/stress_container.sh" // ruta relativa a /Daemon
+	scriptPath := "../cronjob/stress_container.sh"
 
-	// ✅ Usamos la variable global, NO una local
 	stressCmd = exec.Command("bash", scriptPath)
 
 	var out bytes.Buffer
@@ -315,19 +304,18 @@ func RunStressContainerScript() error {
 
 	fmt.Println("Ejecutando script de estrés de contenedores:", scriptPath)
 
-	// ✅ Start() para que NO bloquee el main
+	// Start() para que NO bloquee el main
 	if err := stressCmd.Start(); err != nil {
-		// si falla al arrancar, limpiamos la global
 		stressCmd = nil
 		return fmt.Errorf("error iniciando %s: %w\nstderr:\n%s", scriptPath, err, stderr.String())
 	}
 
-	// ✅ Esperamos en segundo plano, solo para loguear cuando termine
+	// Esperamos en segundo plano, solo para loguear cuando termine
 	go func() {
 		if err := stressCmd.Wait(); err != nil {
-			fmt.Println("⚠️ stress_container.sh terminó con error:", err)
+			fmt.Println("stress_container.sh terminó con error:", err)
 		} else {
-			fmt.Println("✅ Script stress_container.sh finalizado.")
+			fmt.Println("Script stress_container.sh finalizado.")
 		}
 
 		if out.Len() > 0 {
@@ -353,7 +341,7 @@ func RunDetenerScript() error {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
-	fmt.Println("🧹 Ejecutando script de limpieza de contenedores:", scriptPath)
+	fmt.Println("Ejecutando script de limpieza de contenedores:", scriptPath)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("error ejecutando %s: %w\nstderr:\n%s", scriptPath, err, stderr.String())

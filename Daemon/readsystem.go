@@ -106,11 +106,11 @@ func PrintSysInfo(si SysInfo) {
 		fmt.Println()
 	} else {
 		fmt.Println("Todos los utime/stime vienen en 0; no se puede calcular Top CPU aún.")
-		fmt.Println("   (Necesitas que el módulo del kernel llene utime/stime para cada proceso.)")
+		fmt.Println("Necesitas que el módulo del kernel llene utime/stime para cada proceso")
 		fmt.Println()
 	}
 
-	fmt.Println("=== Lista de procesos (primeros 50 mostrados) ===")
+	fmt.Println("=== Lista de procesos primeros 50 mostrados ===")
 	limit := len(si.Procesos)
 	if limit > 50 {
 		limit = 50
@@ -121,6 +121,6 @@ func PrintSysInfo(si SysInfo) {
 			p.Pid, p.Comm, p.State, p.RssKB, p.VmsizeKB, p.Utime, p.Stime, p.TsMs)
 	}
 	if len(si.Procesos) > 50 {
-		fmt.Printf("... (se muestran 50 de %d procesos)\n", len(si.Procesos))
+		fmt.Printf("se muestran 50 de %d procesos\n", len(si.Procesos))
 	}
 }

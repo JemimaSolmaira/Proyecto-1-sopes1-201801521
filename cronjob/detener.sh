@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DETENER CONTENEDORES DE ESTRÉS (stress-*)
+# DETENER CONTENEDORES 
 
 set -e
 
@@ -12,7 +12,7 @@ if [ -z "$CONTAINERS" ]; then
     exit 0
 fi
 
-echo "🧾 Contenedores a detener:"
+echo "Contenedores a detener:"
 docker ps --filter "id=${CONTAINERS}" --format "  - {{.Names}} ({{.ID}})"
 
 docker stop $CONTAINERS

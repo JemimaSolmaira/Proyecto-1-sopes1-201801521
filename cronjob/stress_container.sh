@@ -25,7 +25,7 @@ RUN apt-get update \
     && apt-get install -y stress-ng \
     && rm -rf /var/lib/apt/lists/*
 
-CMD ["bash", "-c", "echo 'Iniciando stress CPU'; stress-ng --cpu 2 --timeout 300s --metrics-brief"]
+CMD ["bash", "-c", "echo 'Iniciando stress CPU'; stress-ng --cpu 2  --metrics-brief"]
 EOF
 
 # ==============================
@@ -41,7 +41,7 @@ RUN apt-get update \
     && apt-get install -y stress-ng \
     && rm -rf /var/lib/apt/lists/*
 
-CMD ["bash", "-c", "echo 'Iniciando stress RAM'; stress-ng --vm 1 --vm-bytes 256M --timeout 300s --metrics-brief"]
+CMD ["bash", "-c", "echo 'Iniciando stress RAM'; stress-ng --vm 1 --vm-bytes 256M --metrics-brief"]
 EOF
 
 # ==============================
@@ -60,7 +60,7 @@ RUN printf '#!/bin/bash\nwhile true; do sleep 30; done\n' \
 CMD ["stress-low"]
 EOF
 
-echo "✅ Imágenes construidas."
+echo "Imágenes construidas."
 echo
 
 # ==============================
@@ -88,7 +88,7 @@ create_random_container() {
     esac
 
     local container_name="stress-${tipo}-${idx}"
-    echo "🧪 Creando contenedor: ${container_name}"
+    echo "Creando contenedor: ${container_name}"
 
     docker run -d --rm --name "${container_name}" "${image}"
 }
@@ -96,20 +96,19 @@ create_random_container() {
 # ==============================
 # LOOP INFINITO CADA 1 MINUTO ✅
 # ==============================
-echo "⏱️ Iniciando generador automático de contenedores (cada 60 segundos)..."
-echo "👉 Presiona CTRL + C para detenerlo"
+echo "Iniciando generador de contenedores cada 60 segundos"
 echo
 
 while true; do
-    echo "🚀 Generando 10 contenedores nuevos: $(date)"
+    echo "Generando 10 contenedores nuevos: $(date)"
 
     for i in $(seq 1 10); do
         create_random_container "${i}"
         sleep 1
     done
 
-    echo "✅ Lote de 10 contenedores creado."
-    echo "⏳ Esperando 60 segundos..."
+    echo "10 contenedores creado"
+    echo "Esperando 60 segundos"
     echo
 
     sleep 60
